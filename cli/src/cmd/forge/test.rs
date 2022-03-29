@@ -13,12 +13,14 @@ use forge::{
     decode::decode_console_logs,
     executor::opts::EvmOpts,
     gas_report::GasReport,
-    trace::{identifier::LocalTraceIdentifier, CallTraceDecoder, TraceKind},
+    trace::{identifier::LocalTraceIdentifier, CallTraceDecoder, TraceKind, RawOrDecodedCall, RawOrDecodedReturnData},
     MultiContractRunner, MultiContractRunnerBuilder, TestFilter, TestKind, TestResult,
 };
 use foundry_config::{figment::Figment, Config};
 use regex::Regex;
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::mpsc::channel, thread};
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::mpsc::channel, thread, rc::Rc, cell::RefCell};
+
+use plotters::prelude::*;
 
 #[derive(Debug, Clone, Parser)]
 pub struct Filter {
@@ -449,7 +451,28 @@ fn test(
                             println!("{}", trace);
                         }
                     }
-
+                    let data: Rc<RefCell<Vec<(f64, f64)>>> = Rc::new(RefCell::new(Vec::new()));
+                    result.traces.iter().for_each(|(kind, trace)| {
+                        // println!("kind: {:?}, trace: {:?}", kind, trace);
+                        if let TraceKind::Execution = kind {
+                            trace.arena.iter().for_each(|node| {
+                                let trace = &node.trace;
+                                if let Some(label) = &trace.label {
+                                    if label == "Math" {
+                                        if let RawOrDecodedCall::Decoded(func, args) = &trace.data {
+                                            if let RawOrDecodedReturnData::Decoded(output) = &trace.output {
+                                                println!("-> {}({:?}) = {}", func, args, output);
+                                                let x = args[0].parse::<f64>().unwrap();
+                                                let y = output.parse::<f64>().unwrap();
+                                                data.borrow_mut().push((x, y));
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+                    let _ = draw_chart(0f64, 255f64, 0f64, 510f64, &data.borrow());
                     if gas_reporting {
                         gas_report.analyze(&result.traces);
                     }

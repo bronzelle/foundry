@@ -4,7 +4,7 @@ pub use proptest::test_runner::{Config as FuzzConfig, Reason};
 
 use crate::{
     executor::{Executor, RawCallResult},
-    trace::CallTraceArena,
+    trace::{CallTraceArena, CallTraceNode},
 };
 use ethers::{
     abi::{Abi, Function, RawLog, Token},
@@ -13,7 +13,7 @@ use ethers::{
 use proptest::test_runner::{TestCaseError, TestError, TestRunner};
 use revm::db::DatabaseRef;
 use serde::{Deserialize, Serialize};
-use std::{cell::RefCell, collections::BTreeMap, fmt};
+use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
 use strategies::{
     build_initial_state, collect_state_from_call, fuzz_calldata, fuzz_calldata_from_state,
     EvmFuzzState,
@@ -66,6 +66,8 @@ where
         // Stores fuzz state for use with [fuzz_calldata_from_state]
         let state: EvmFuzzState = build_initial_state(&self.executor.db);
 
+        let tracs: Rc<RefCell<Vec<CallTraceNode>>> = Rc::new(RefCell::new(Vec::new()));
+
         // TODO: We should have a `FuzzerOpts` struct where we can configure the fuzzer. When we
         // have that, we should add a way to configure strategy weights
         let strat = proptest::strategy::Union::new_weighted(vec![
@@ -96,6 +98,8 @@ where
                 should_fail,
             );
 
+            tracs.borrow_mut().extend_from_slice(&call.traces.clone().unwrap().arena);
+
             if success {
                 cases.borrow_mut().push(FuzzCase {
                     calldata,
@@ -121,6 +125,15 @@ where
             }
         });
 
+        let traces = if let Ok(trace) = Rc::try_unwrap(tracs) {
+            trace.into_inner()
+        } else {
+            Vec::new()
+        };
+        
+        let call_trace_arena = CallTraceArena { arena: traces };
+
+
         let (calldata, call) = counterexample.into_inner();
         let mut result = FuzzTestResult {
             cases: FuzzedCases::new(cases.into_inner()),
@@ -128,7 +141,7 @@ where
             reason: None,
             counterexample: None,
             logs: call.logs,
-            traces: call.traces,
+            traces: Some(call_trace_arena),
             labeled_addresses: call.labels,
         };
 
